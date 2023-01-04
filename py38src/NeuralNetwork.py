@@ -3,6 +3,7 @@ from NodeArrays import NodeArray, InputArray, OutputArray
 from ActivationFunctions import getActivationFunction
 from ErrorFunctions import getErrorFunction
 from utils.LayerUtils import randomiseWeights, randomiseBiases
+from utils.TrainingUtils import toBatches
 
 
 class NeuralNetwork:
@@ -10,6 +11,7 @@ class NeuralNetwork:
         self,
         errorFunction: str = "MSE",
         epochs: int = 100,
+        batchSize: int = 10,
         learningRate: float = 0.1,
         learningRateDecay: float = 1.0,
         momentum: float = 0.0,
@@ -18,6 +20,7 @@ class NeuralNetwork:
         self.errorFunction, self.errorDifferential = getErrorFunction(errorFunction)
 
         self.epochs = epochs
+        self.batchSize = batchSize
         self.learningRate = learningRate
         self.origLearningRate = learningRate
         self.learningRateDecay = learningRateDecay
@@ -62,7 +65,7 @@ class NeuralNetwork:
         string += f"{self.outputArray}" + "\n"
         return string
 
-    def addLayer(self, layer: Layer | InputLayer | OutputLayer):
+    def addLayer(self, layer):
         if self.inputLayer is None:
             if not isinstance(layer, InputLayer):
                 raise TypeError("First layer must be an Input Layer.")
@@ -78,8 +81,8 @@ class NeuralNetwork:
 
     def connectLayers(
         self,
-        initialWeights: list[list[list[float]]] = None,
-        initialBiases: list[list[float]] = None,
+        initialWeights=None,
+        initialBiases=None,
     ):
 
         self.compiled = True
@@ -150,7 +153,7 @@ class NeuralNetwork:
         self.setWeights(initialWeights)
         self.setBiases(initialBiases)
 
-    def setWeights(self, weights: list[list[list[float]]]):
+    def setWeights(self, weights):
         # Weights Array Format:
         # [Layer][OutputNode][InputNode]
 
@@ -159,7 +162,7 @@ class NeuralNetwork:
             self.hiddenLayers[i].setWeights(weights[i + 1])
         self.outputLayer.setWeights(weights[-1])
 
-    def setBiases(self, biases: list[list[float]]):
+    def setBiases(self, biases):
         # Biases Array Format:
         # [Layer][OutputNode]
         self.inputLayer.setBiases(biases[0])
@@ -183,7 +186,7 @@ class NeuralNetwork:
             self.hiddenLayers[i].updateBiases(changes[i + 1], self.learningRate)
         self.outputLayer.updateBiases(changes[-1], self.learningRate)
 
-    def forwardPropagate(self, input: list[float]) -> list[float]:
+    def forwardPropagate(self, input):
         self.inputArray.load(input)
         self.inputLayer.forwardPropagate()
         for i in range(len(self.hiddenLayers)):
@@ -193,22 +196,22 @@ class NeuralNetwork:
 
         return self.outputArray.getValues()
 
-    def predict(self, input: list[float]) -> list[float]:
+    def predict(self, input):
         resetTo = self.inputArray.getValues()
         self.inputArray.load(input)
         prediction = self.inputLayer.forwardPropagate()
 
         return self.forwardPropagate(input)
 
-    def getCurrentError(self, batch: list[tuple[list[float], list[float]]]) -> float:
+    def getCurrentError(self, batch) -> float:
         totalError = sum(
             self.errorFunction(self.predict(input), actual) for input, actual in batch
         )
         return totalError / len(batch)
 
-    def backPropagateSingle(self, actual: list[float]) -> list[float]:
+    def backPropagateSingle(self, actual):
 
-        dCost_dOutputs: list[float] = [[] for _ in range(len(self.hiddenLayers) + 2)]
+        dCost_dOutputs = [[] for _ in range(len(self.hiddenLayers) + 2)]
         # [inputLayer, hiddenLayer1, hiddenLayer2, ..., outputLayer]
 
         dCost_dOutputs[-1] = self.errorDifferential(
@@ -221,8 +224,8 @@ class NeuralNetwork:
             dCost_dBiases,
         ) = self.backPropagateSingleFromLayer(actual, self.outputArray, dCost_dOutputs)
 
-        all_dCost_dWeights: list[list[list[float]]] = [dCost_dWeights]
-        all_dCost_dBiases: list[list[float]] = [dCost_dBiases]
+        all_dCost_dWeights = [dCost_dWeights]
+        all_dCost_dBiases = [dCost_dBiases]
         for array in reversed(self.hiddenArrays):
             (
                 dCost_dOutputs,
@@ -240,10 +243,10 @@ class NeuralNetwork:
 
     def backPropagateSingleFromLayer(
         self,
-        actual: list[float],
-        outputArray: NodeArray | OutputArray,  # outputLayer is not the final layer
+        actual,
+        outputArray,  # outputLayer is not the final layer
         # it means the layer from which this calculation of backprop is coming from
-        dCost_dOutputs: list[float],
+        dCost_dOutputs,
     ):
 
         if outputArray is self.outputArray:
@@ -298,13 +301,13 @@ class NeuralNetwork:
 
         return dCost_dOutputs, dCost_dWeights, dCost_dBiases
 
-    def trainingStep(self, batch: list[tuple[list[float], list[float]]]) -> None:
+    def trainingStep(self, batch) -> None:
 
         # format: [layer][outputNode][inputNode]
-        mean_dCost_dWeights: list[list[list[float]]] = []
+        mean_dCost_dWeights = []
 
         # format: [layer][outputNode]
-        mean_dCost_dBiases: list[list[float]] = []
+        mean_dCost_dBiases = []
 
         for inputs, actuals in batch:
             self.forwardPropagate(inputs)
@@ -323,8 +326,10 @@ class NeuralNetwork:
                                     self.prevUpdateWeights[i][j][k] * self.momentum
                                 )
 
-                for i in range(len(dCost_dBiases)):
-                    for j in range(len(dCost_dBiases[i])):
+                        # same as above but for biases
+                        # can be commented out
+                        # for i in range(len(dCost_dBiases)):
+                        #     for j in range(len(dCost_dBiases[i])):
                         mean_dCost_dBiases[i][j] += dCost_dBiases[i][j]
                         if self.prevUpdateBiases is not None:
                             mean_dCost_dBiases[i][j] += (
@@ -344,24 +349,25 @@ class NeuralNetwork:
 
     def train(
         self,
-        trainingData: list[tuple[list[float], list[float]]],
-        testingData: list[tuple[list[float], list[float]]],
+        trainingData,
+        testingData=None,
     ) -> None:
 
         from tqdm import tqdm
 
         errors = []
+        # testingData=  testingData[:100]
+        trainingData = toBatches(trainingData, self.batchSize)
 
         with tqdm(range(self.epochs)) as loop:
             for epoch in loop:
                 for batch in trainingData:
                     self.trainingStep(batch)
-                self.decayLearningRate(epoch)
                 if testingData is not None:
                     error = self.getCurrentError(testingData)
                     errors.append(error)
                     loop.set_description(f"Error: {error:.2f}")
-
+                self.decayLearningRate(epoch)
         return errors
 
 
@@ -373,26 +379,25 @@ if __name__ == "__main__":
         data = f.read().strip().split("\n")
     for line in range(len(data)):
         data[line] = data[line].split(",")
-        data[line] = ([int(data[line][0])], [int(data[line][1])])
+        data[line] = ([float(data[line][0])], [float(data[line][1])])
 
     # split data into training and testing
     trainingData = data[: int(len(data) * 0.8)]
     testingData = data[int(len(data) * 0.8) :]
 
     # split training data into batches
-    trainingData = [trainingData[i : i + 10] for i in range(0, len(trainingData), 20)]
 
     nn = NeuralNetwork(
         errorFunction="MAE",
-        epochs=10000,
-        learningRate=0.00005,
-        learningRateDecay=0.01,
-        momentum=0.01,
+        epochs=500,
+        batchSize=10,
+        learningRate=0.0001,
+        learningRateDecay=0.005,
+        momentum=0.02,
     )
-    nn.addLayer(InputLayer(3, inputSize=1))
-    nn.addLayer(Layer(3, activationFunction="Leaky ReLU"))
-    nn.addLayer(Layer(5, activationFunction="Leaky ReLU"))
-    nn.addLayer(Layer(3, activationFunction="Leaky ReLU"))
+    nn.addLayer(InputLayer(10, inputSize=1))
+    nn.addLayer(Layer(20, activationFunction="Leaky ReLU"))
+    nn.addLayer(Layer(10, activationFunction="Leaky ReLU"))
     nn.addLayer(Layer(1, activationFunction="Linear"))
 
     nn.connectLayers()

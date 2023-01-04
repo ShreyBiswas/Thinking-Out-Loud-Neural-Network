@@ -6,8 +6,12 @@ def gen_X(a, b, noise):
     return [x + randrange(-noise, noise) for x in range(a, b)]
 
 
+degree = 3
+coeffs = [randrange(-10, 10) for _ in range(degree + 1)]
+
+
 def f(x):
-    return 3 * (x**3) - 2 * (x**2) + 3 * x + 1
+    return sum(coeffs[i] * (x**i) for i in range(degree + 1))
 
 
 def gen_Y(X, noise):

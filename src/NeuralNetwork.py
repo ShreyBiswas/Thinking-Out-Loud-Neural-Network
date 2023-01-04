@@ -1,423 +1,433 @@
-from random import randrange
-
 from Layers import Layer, InputLayer, OutputLayer
 from NodeArrays import NodeArray, InputArray, OutputArray
 from ActivationFunctions import getActivationFunction
 from ErrorFunctions import getErrorFunction
-
-
-def mean(l: list) -> int:
-    return sum(l) / len(l)
+from utils.LayerUtils import randomiseWeights, randomiseBiases
+from utils.TrainingUtils import toBatches
 
 
 class NeuralNetwork:
     def __init__(
         self,
-        inputSize: int,
-        hiddenLayerSizes: list[int],
-        # HYPERPARAMETERS
-        outputLabels: list[str] = None,
-        hiddenLayerWeights: list[list[list[float]]]  # fmt: skip
-        =None,
-        hiddenLayerBiases: list[list[float]]  # fmt: skip
-        =None,  # includes all hidden layers + output layer as final element
-        activationFunction: str = "Leaky ReLU",
-        activationHyperparameters: dict = {"leakiness": 0.05},
         errorFunction: str = "MSE",
-        trainingHyperparameters: dict = {
-            "learningRate": 0.1,
-            "learningRateDecay": 0.1,
-            "epochs": 1000,
-            "momentum": 0.5,
-            "batchSize": 4,
-        },
-    ) -> None:
+        epochs: int = 100,
+        batchSize: int = 10,
+        learningRate: float = 0.1,
+        learningRateDecay: float = 1.0,
+        momentum: float = 0.0,
+    ):
 
-        self.activationFunction, self.activationDifferential = getActivationFunction(
-            activationFunction, **activationHyperparameters
-        )
         self.errorFunction, self.errorDifferential = getErrorFunction(errorFunction)
-        self.learningRate = trainingHyperparameters.get("learningRate", 0.1)
-        self.learningRateDecay = trainingHyperparameters.get("learningRateDecay", 0.1)
-        self.epochs = trainingHyperparameters.get("epochs", 100)
-        self.momentum = trainingHyperparameters.get("momentum", 0.5)
-        self.batchSize = trainingHyperparameters.get("batchSize", 4)
-        self.mean_dCost_dWeights = None
-        self.mean_dCost_dBiases = None
 
-        self.inputArray = InputArray(inputSize)
-        self.inputLayer = InputLayer(
-            prevNodeCount=inputSize, nextNodeCount=hiddenLayerSizes[0]
+        self.epochs = epochs
+        self.batchSize = batchSize
+        self.learningRate = learningRate
+        self.origLearningRate = learningRate
+        self.learningRateDecay = learningRateDecay
+        self.momentum = momentum
+        self.origMomentum = momentum
+
+        self.inputLayer = None
+        self.outputLayer = None
+        self.hiddenLayers = []
+
+        self.compiled = False
+        self.prevUpdateWeights = None
+        self.prevUpdateBiases = None
+
+    def __str__(self):
+        if not self.compiled:
+            return "Neural Network is not compiled yet. Please call NeuralNetwork.connectLayers() first."
+        string = "\n"
+        string += f"{self.inputArray}" + "\n"
+        string += f"{self.inputLayer}" + "\n"
+        for i in range(len(self.hiddenLayers)):
+            string += f"{self.hiddenArrays[i]}" + "\n"
+            string += f"{self.hiddenLayers[i]}" + "\n"
+        string += f"{self.hiddenArrays[-1]}" + "\n"
+        string += f"{self.outputLayer}" + "\n"
+        string += f"{self.outputArray}" + "\n"
+        return string
+
+    def __repr__(self):
+        if not self.compiled:
+            return "Neural Network is not compiled yet. Please call NeuralNetwork.connectLayers() first."
+        string = "\n"
+        string += f"{self.inputArray}" + "\n"
+        string += f"Input Layer -1: {repr(self.inputLayer)}" + "\n"
+        for i in range(len(self.hiddenLayers)):
+            string += f"{self.hiddenArrays[i]}" + "\n"
+            string += f"Hidden Layer {i}: {repr(self.hiddenLayers[i])}" + "\n"
+        string += f"{self.hiddenArrays[-1]}" + "\n"
+        string += (
+            f"Output Layer {len(self.hiddenLayers)}: {repr(self.outputLayer)}" + "\n"
         )
+        string += f"{self.outputArray}" + "\n"
+        return string
 
-        self.outputArray = OutputArray(
-            size=len(outputLabels),
-            index=len(hiddenLayerSizes),
-            labels=outputLabels,
-        )
-        self.outputLayer = OutputLayer(
-            indexBetween=(len(hiddenLayerSizes) - 1, len(hiddenLayerSizes)),
-            prevNodeCount=hiddenLayerSizes[-1],
-            nextNodeCount=len(outputLabels),
-            activationFunction=self.activationFunction,
-            initialWeights=hiddenLayerWeights[-1] if hiddenLayerWeights else None,
-            initialBias=hiddenLayerBiases[-1] if hiddenLayerBiases else None,
-        )
-
-        self.hiddenNodeArrays = [
-            NodeArray(size, index) for index, size in enumerate(hiddenLayerSizes)
-        ]
-        self.hiddenLayers = [
-            Layer(
-                indexBetween=(index, index + 1),
-                prevNodeCount=hiddenLayerSizes[index],
-                nextNodeCount=hiddenLayerSizes[index + 1],
-                activationFunction=self.activationFunction,
-                initialWeights=hiddenLayerWeights[index + 1] if hiddenLayerWeights else None  # fmt: skip
-                ,
-                initialBias=hiddenLayerBiases[index + 1] if hiddenLayerBiases else None,
-            )
-            for index in range(len(hiddenLayerSizes) - 1)
-        ]
-
-    def __str__(self) -> str:
-        return "\n".join(
-            str(array)
-            for array in [self.inputArray, *self.hiddenNodeArrays, self.outputArray]
-        )
-
-    def __len__(self) -> int:
-        return len(self.hiddenNodeArrays) + 1
-
-    def __getitem__(self, index: int) -> NodeArray:
-        # include input and output arrays
-        if index == 0:
-            return self.inputArray
-        elif index == len(self):
-            return self.outputArray
+    def addLayer(self, layer: Layer | InputLayer | OutputLayer):
+        if self.inputLayer is None:
+            if not isinstance(layer, InputLayer):
+                raise TypeError("First layer must be an Input Layer.")
+            self.inputLayer = layer
+            return
+        elif self.outputLayer is not None:
+            raise ValueError("Output Layer already added.")
+        elif isinstance(layer, OutputLayer):
+            self.outputLayer = layer
+            return
         else:
-            return self.hiddenNodeArrays[index - 1]
+            self.hiddenLayers.append(layer)
 
-    def __iter__(self):
-        return iter([self.inputArray, *self.hiddenNodeArrays, self.outputArray])
+    def connectLayers(
+        self,
+        initialWeights: list[list[list[float]]] = None,
+        initialBiases: list[list[float]] = None,
+    ):
 
-    def loadInput(self, inputValues: list[float]):
-        self.inputArray.load(inputValues)
+        self.compiled = True
 
-    def loadOutput(self, actuals: list[float]):
-        self.actuals = actuals
+        if self.inputLayer is None:
+            raise ValueError("Input Layer not added.")
+        if self.outputLayer is None and len(self.hiddenLayers) == 0:
+            raise ValueError("No hidden or output layers added.")
 
-    def getOutput(self) -> list[float]:
+        if self.outputLayer is None:
+            self.outputLayer = self.hiddenLayers.pop().toOutputLayer()
+
+        self.inputArray = InputArray(self.inputLayer.inputSize)
+
+        self.hiddenArrays: list[NodeArray] = [
+            NodeArray(self.inputLayer.nextNodeCount, 0)
+        ]
+
+        self.hiddenArrays.extend(
+            NodeArray(self.hiddenLayers[i].nextNodeCount, i + 1)
+            for i in range(len(self.hiddenLayers))
+        )
+        self.outputArray = OutputArray(
+            self.outputLayer.nextNodeCount, len(self.hiddenLayers) + 1
+        )
+
+        self.inputLayer.connectBetween(self.inputArray, self.hiddenArrays[0])
+        for i in range(len(self.hiddenLayers)):
+            self.hiddenLayers[i].connectBetween(
+                self.hiddenArrays[i], self.hiddenArrays[i + 1]
+            )
+        self.outputLayer.connectBetween(self.hiddenArrays[-1], self.outputArray)
+
+        if initialWeights is None:
+            initialWeights = []
+            initialWeights.append(  # add input layer weights
+                randomiseWeights(
+                    self.inputLayer.inputSize,
+                    self.inputLayer.nextNodeCount,
+                    between=(-1, 1),
+                )
+            )
+            initialWeights.extend(  # add hidden layer weights
+                randomiseWeights(
+                    self.hiddenLayers[i].prevNodeCount,
+                    self.hiddenLayers[i].nextNodeCount,
+                )
+                for i in range(len(self.hiddenLayers))
+            )
+            initialWeights.append(  # add output layer weights
+                randomiseWeights(
+                    self.outputLayer.prevNodeCount, self.outputLayer.nextNodeCount
+                )
+            )
+        if initialBiases is None:
+            initialBiases = []
+            initialBiases.append(
+                randomiseBiases(self.inputLayer.nextNodeCount, between=(-1, 1))
+            )
+            initialBiases.extend(
+                randomiseBiases(self.hiddenLayers[i].nextNodeCount)
+                for i in range(len(self.hiddenLayers))
+            )
+            initialBiases.append(
+                randomiseBiases(self.outputLayer.nextNodeCount, between=(-1, 1))
+            )
+
+        self.setWeights(initialWeights)
+        self.setBiases(initialBiases)
+
+    def setWeights(self, weights: list[list[list[float]]]):
+        # Weights Array Format:
+        # [Layer][OutputNode][InputNode]
+
+        self.inputLayer.setWeights(weights[0])
+        for i in range(len(self.hiddenLayers)):
+            self.hiddenLayers[i].setWeights(weights[i + 1])
+        self.outputLayer.setWeights(weights[-1])
+
+    def setBiases(self, biases: list[list[float]]):
+        # Biases Array Format:
+        # [Layer][OutputNode]
+        self.inputLayer.setBiases(biases[0])
+        for i in range(len(self.hiddenLayers)):
+            self.hiddenLayers[i].setBiases(biases[i + 1])
+        self.outputLayer.setBiases(biases[-1])
+
+    def updateWeights(self, changes):
+        # Changes Array Format:
+        # [Layer][OutputNode][InputNode]
+        self.inputLayer.updateWeights(changes[0], self.learningRate)
+        for i in range(len(self.hiddenLayers)):
+            self.hiddenLayers[i].updateWeights(changes[i + 1], self.learningRate)
+        self.outputLayer.updateWeights(changes[-1], self.learningRate)
+
+    def updateBiases(self, changes):
+        # Changes Array Format:
+        # [Layer][OutputNode]
+        self.inputLayer.updateBiases(changes[0], self.learningRate)
+        for i in range(len(self.hiddenLayers)):
+            self.hiddenLayers[i].updateBiases(changes[i + 1], self.learningRate)
+        self.outputLayer.updateBiases(changes[-1], self.learningRate)
+
+    def forwardPropagate(self, input: list[float]) -> list[float]:
+        self.inputArray.load(input)
+        self.inputLayer.forwardPropagate()
+        for i in range(len(self.hiddenLayers)):
+            self.hiddenLayers[i].forwardPropagate()
+
+        self.outputLayer.forwardPropagate()
+
         return self.outputArray.getValues()
 
-    def forwardPropagate(self):
-        self.inputLayer.loadInput(self.inputArray)
-        self.inputLayer.forwardPropagate(self.hiddenNodeArrays[0])
+    def predict(self, input: list[float]) -> list[float]:
+        resetTo = self.inputArray.getValues()
+        self.inputArray.load(input)
+        prediction = self.inputLayer.forwardPropagate()
 
-        for index, layer in enumerate(self.hiddenLayers):
-            # layer when index is 'i' goes between 'i-1' and 'i'
-            layer.loadInput(self.hiddenNodeArrays[index])
-            layer.forwardPropagate(self.hiddenNodeArrays[index + 1])
+        return self.forwardPropagate(input)
 
-        self.outputLayer.loadInput(self.hiddenNodeArrays[-1])
-        self.outputLayer.forwardPropagate(self.outputArray)
+    def getCurrentError(self, batch: list[tuple[list[float], list[float]]]) -> float:
+        totalError = sum(
+            self.errorFunction(self.predict(input), actual) for input, actual in batch
+        )
+        return totalError / len(batch)
 
-    def forwardPropagateSingle(self, inputValue: list[float], resetInput):
-        self.loadInput(inputValue)
-        self.forwardPropagate()
-        x = self.getOutput()
-        self.loadInput(resetInput)
-        self.forwardPropagate()
-        return x
+    def backPropagateSingle(self, actual: list[float]) -> list[float]:
 
-    def getCurrentError(self) -> float:
-        return self.errorFunction(self.getOutput(), self.actuals)
+        dCost_dOutputs: list[float] = [[] for _ in range(len(self.hiddenLayers) + 2)]
+        # [inputLayer, hiddenLayer1, hiddenLayer2, ..., outputLayer]
 
-    def trainingStep(self, batch: tuple[list[float], list[float]]):
-        # batch is a tuple of (inputValues, actuals)
-        allData_dCost_dWeights = []
-        allData_dCost_dBiases = []
+        dCost_dOutputs[-1] = self.errorDifferential(
+            self.outputArray.getValues(), actual
+        )  # initial dCost_dOutput from error
 
-        for inputValue, actual in batch:
-            self.loadInput(inputValue)
-            self.loadOutput(actual)
-            self.forwardPropagate()
-            (
-                singleData_dCost_dWeights,
-                singleData_dCost_dBiases,
-            ) = self.backPropagateSingle(actual)
-            allData_dCost_dWeights.append(singleData_dCost_dWeights)
-            allData_dCost_dBiases.append(singleData_dCost_dBiases)
-
-        # shape of allData_dCost_dBiases:
-        # [dataIndex][layerIndex][nodeIndex]
-        # shape of allData_dCost_dWeights:
-        # [dataIndex][layerIndex][outputNodeIndex][inputNodeIndex]
-        # remember last index is Output Layer
-
-        # average dCost/dWeights and dCost/dBiases across all data in batch
-        # first total
-        mean_dCost_dWeights = allData_dCost_dWeights[0]
-        mean_dCost_dBiases = allData_dCost_dBiases[0]
-
-        for dataPiece in allData_dCost_dWeights[1:]:
-            for layerIndex, layer in enumerate(dataPiece):
-                for outputNodeIndex, outputNode in enumerate(layer):
-                    for inputNodeIndex, inputNode in enumerate(outputNode):
-                        mean_dCost_dWeights[layerIndex][outputNodeIndex][
-                            inputNodeIndex
-                        ] += inputNode
-
-        for dataPiece in allData_dCost_dBiases[1:]:
-            for layerIndex, layer in enumerate(dataPiece):
-                for nodeIndex, node in enumerate(layer):
-                    mean_dCost_dBiases[layerIndex][nodeIndex] += node
-
-        # then divide by number of data pieces
-
-        for layerIndex, layer in enumerate(mean_dCost_dWeights):
-            for outputNodeIndex, outputNode in enumerate(layer):
-                for inputNodeIndex, inputNode in enumerate(outputNode):
-                    mean_dCost_dWeights[layerIndex][outputNodeIndex][
-                        inputNodeIndex
-                    ] /= len(batch)
-        for layerIndex, layer in enumerate(mean_dCost_dBiases):
-            for nodeIndex, node in enumerate(layer):
-                mean_dCost_dBiases[layerIndex][nodeIndex] /= len(batch)
-
-        if (
-            self.mean_dCost_dWeights is not None
-        ):  # if not first training step, use momentum
-            for layerIndex, layer in enumerate(mean_dCost_dWeights):
-                for outputNodeIndex, outputNode in enumerate(layer):
-                    for inputNodeIndex, inputNode in enumerate(outputNode):
-                        mean_dCost_dWeights[layerIndex][outputNodeIndex][
-                            inputNodeIndex
-                        ] += (
-                            self.momentum
-                            * self.mean_dCost_dWeights[layerIndex][outputNodeIndex][
-                                inputNodeIndex
-                            ]
-                        )
-            for layerIndex, layer in enumerate(mean_dCost_dBiases):
-                for nodeIndex, node in enumerate(layer):
-                    mean_dCost_dBiases[layerIndex][nodeIndex] += (
-                        self.momentum * self.mean_dCost_dBiases[layerIndex][nodeIndex]
-                    )
-
-        # update weights and biases
-        for index, layer in enumerate(self.hiddenLayers):
-            layer.updateWeights(mean_dCost_dWeights[index], self.learningRate)
-            layer.updateBiases(mean_dCost_dBiases[index], self.learningRate)
-
-        self.outputLayer.updateWeights(mean_dCost_dWeights[-1], self.learningRate)
-        self.outputLayer.updateBiases(mean_dCost_dBiases[-1], self.learningRate)
-
-        # store for momentum
-        self.mean_dCost_dWeights = mean_dCost_dWeights
-        self.mean_dCost_dBiases = mean_dCost_dBiases
-
-    def backPropagateSingle(self, actuals: list[float]):  # iterative solution
-        # memoise dCost/dOutput
-        dCost_dOutputs = [
-            [None for _ in range(len(nodeArray))]
-            for nodeArray in [*self.hiddenNodeArrays, self.outputArray]
-        ]
-
-        dCost_dOutputs[-1] = self.errorDifferential(self.getOutput(), actuals)
-
-        # backPropagation from Output to final HiddenLayer
         (
             dCost_dOutputs,
-            all_dCost_dWeights,
-            all_dCost_dBiases,
-        ) = self.backPropagateSingleFromLayer(dCost_dOutputs, hiddenLayerIndex=-1)
+            dCost_dWeights,
+            dCost_dBiases,
+        ) = self.backPropagateSingleFromLayer(actual, self.outputArray, dCost_dOutputs)
 
-        allLayers_dCost_dWeights = [all_dCost_dWeights]
-        allLayers_dCost_dBiases = [all_dCost_dBiases]
-
-        # backPropagation through Hiddens
-        # stops before first hidden layer, since 'prevLayer' (needed for linearOutput) is inputLayer
-
-        for hiddenLayerIndex in range(len(self.hiddenLayers) - 1, 0, -1):
+        all_dCost_dWeights: list[list[list[float]]] = [dCost_dWeights]
+        all_dCost_dBiases: list[list[float]] = [dCost_dBiases]
+        for array in reversed(self.hiddenArrays):
             (
                 dCost_dOutputs,
-                all_dCost_dWeights,
-                all_dCost_dBiases,
-            ) = self.backPropagateSingleFromLayer(dCost_dOutputs, hiddenLayerIndex)
-            allLayers_dCost_dWeights.insert(0, all_dCost_dWeights)
-            allLayers_dCost_dBiases.insert(0, all_dCost_dBiases)
-
-        # backPropagation from first Hidden to Input
-        (
-            dCost_dOutputs,
-            all_dCost_dWeights,
-            all_dCost_dBiases,
-        ) = self.backPropagateSingleFromLayer(dCost_dOutputs, hiddenLayerIndex=1)
-        allLayers_dCost_dWeights.insert(0, all_dCost_dWeights)
-        allLayers_dCost_dBiases.insert(0, all_dCost_dBiases)
-
-        return allLayers_dCost_dWeights, allLayers_dCost_dBiases
-
-    def backPropagateSingleFromLayer(self, dCost_dOutputs, hiddenLayerIndex):
-        if hiddenLayerIndex == -1:
-            size = len(self.outputArray)
-            prevLayer = self.hiddenLayers[-1]
-        elif hiddenLayerIndex == 0:
-            size = len(self.hiddenNodeArrays[0])
-            prevLayer = self.inputLayer
-        else:
-            size = len(self.hiddenNodeArrays[hiddenLayerIndex])
-            prevLayer = self.hiddenLayers[hiddenLayerIndex - 1]
-
-        all_dCost_dWeights = []
-        all_dCost_dBias = []
-        mean_dCost_dPrevNeurons = [[] for _ in range(size)]
-
-        for outputNeuronIndex in range(size):
-            dCost_dOutput = dCost_dOutputs[hiddenLayerIndex][
-                outputNeuronIndex
-            ]  # single number, how this Output Neuron affects the Cost
-
-            dOutput_dActivation = self.activationDifferential(  # single number, how the Input Neuron's Activation affects this Output Neuron
-                prevLayer.linearOutput(outputNeuronIndex)
-            )
-
-            dActivation_dWeight = (
-                prevLayer.input
-            )  # array of numbers, how each Weight affects this Output Neuron
-            dActivation_dPrevNeuron = prevLayer.weights[
-                outputNeuronIndex
-            ]  # array of numbers, how each previous Neurons' value affects this Output Neuron
-
-            dCost_dWeights = [
-                dCost_dOutput * dOutput_dActivation * dAdW
-                for dAdW in dActivation_dWeight
-            ]
-            dCost_dPrevNeurons = [
-                dCost_dOutput * dOutput_dActivation * dAdPN
-                for dAdPN in dActivation_dPrevNeuron
-            ]
-
-            all_dCost_dBias.append(
-                dCost_dOutput * dOutput_dActivation
-            )  # dActivation_dBias always equals 1
+                dCost_dWeights,
+                dCost_dBiases,
+            ) = self.backPropagateSingleFromLayer(actual, array, dCost_dOutputs)
 
             all_dCost_dWeights.append(dCost_dWeights)
-            for i in range(
-                len(dCost_dPrevNeurons)
-            ):  # add to corresponding input neuron tracker
-                mean_dCost_dPrevNeurons[i].append(dCost_dPrevNeurons[i])
+            all_dCost_dBiases.append(dCost_dBiases)
 
-        mean_dCost_dPrevNeurons = [mean(i) for i in mean_dCost_dPrevNeurons]
-        dCost_dOutputs[hiddenLayerIndex - 1] = mean_dCost_dPrevNeurons
+        return (
+            all_dCost_dWeights[::-1],
+            all_dCost_dBiases[::-1],
+        )  # reverse to get correct order from input to output
 
-        return dCost_dOutputs, all_dCost_dWeights, all_dCost_dBias
+    def backPropagateSingleFromLayer(
+        self,
+        actual: list[float],
+        outputArray: NodeArray | OutputArray,  # outputLayer is not the final layer
+        # it means the layer from which this calculation of backprop is coming from
+        dCost_dOutputs: list[float],
+    ):
 
-    def decayLearningRate(self, elapsedEpochs):
-        if elapsedEpochs % 500 == 0:
-            self.learningRate *= self.learningRateDecay
-            self.momentum *= 1 - self.learningRateDecay
+        if outputArray is self.outputArray:
+            layer = self.outputLayer
+        elif outputArray.index == 0:
+            layer = self.inputLayer  # first hidden layer is connected to input layer
+        else:
+            layer = self.hiddenLayers[
+                outputArray.index - 1
+            ]  # each hidden layer outputs to the array with +1 index
 
+        # positive if predicted output is too high, negative if output is too low
+        dCost_dOutput = dCost_dOutputs[outputArray.index]
+
+        dCost_dWeights = []  # format: [outputNode][inputNode]
+        dCost_dBiases = []  # format: [outputNode]
+        dCost_dInputs = []  # format: [outputNode][inputNode]
+
+        for outputNode in range(len(outputArray)):
+            dCost_dWeights.append([])  # element holds changes for this node
+            dCost_dInputs.append([])
+            dOutput_dActivation = layer.activationDifferential(
+                layer.linearOutput(outputNode)
+            )
+
+            for inputNode in range(len(layer.inputArray)):
+                dActivation_dWeight = layer.inputArray[inputNode]
+                dActivation_dInput = layer.getWeight(inputNode, outputNode)
+
+                dCost_dWeights[outputNode].append(
+                    dCost_dOutput[outputNode]
+                    * dOutput_dActivation
+                    * dActivation_dWeight
+                )
+                dCost_dInputs[outputNode].append(
+                    dCost_dOutput[outputNode] * dOutput_dActivation * dActivation_dInput
+                )
+            dCost_dBiases.append(  # like dCost_dWeights but with input = 1
+                dCost_dOutput[outputNode] * dOutput_dActivation
+            )
+
+        # average dCost_dInputs
+        dCost_dInputs = [
+            (
+                sum(dCost_dInputs[i][j] for i in range(len(dCost_dInputs)))
+                / len(dCost_dInputs)
+            )
+            for j in range(len(dCost_dInputs[0]))
+        ]
+
+        dCost_dOutputs[outputArray.index - 1] = dCost_dInputs
+
+        return dCost_dOutputs, dCost_dWeights, dCost_dBiases
+
+    def trainingStep(self, batch: list[tuple[list[float], list[float]]]) -> None:
+
+        # format: [layer][outputNode][inputNode]
+        mean_dCost_dWeights: list[list[list[float]]] = []
+
+        # format: [layer][outputNode]
+        mean_dCost_dBiases: list[list[float]] = []
+
+        for inputs, actuals in batch:
+            self.forwardPropagate(inputs)
+            dCost_dWeights, dCost_dBiases = self.backPropagateSingle(actuals)
+
+            if not mean_dCost_dWeights:
+                mean_dCost_dWeights = dCost_dWeights
+                mean_dCost_dBiases = dCost_dBiases
+            else:
+                for i in range(len(dCost_dWeights)):
+                    for j in range(len(dCost_dWeights[i])):
+                        for k in range(len(dCost_dWeights[i][j])):
+                            mean_dCost_dWeights[i][j][k] += dCost_dWeights[i][j][k]
+                            if self.prevUpdateWeights is not None:
+                                mean_dCost_dWeights[i][j][k] += (
+                                    self.prevUpdateWeights[i][j][k] * self.momentum
+                                )
+
+                        # same as above but for biases
+                        # can be commented out
+                        # for i in range(len(dCost_dBiases)):
+                        #     for j in range(len(dCost_dBiases[i])):
+                        mean_dCost_dBiases[i][j] += dCost_dBiases[i][j]
+                        if self.prevUpdateBiases is not None:
+                            mean_dCost_dBiases[i][j] += (
+                                self.prevUpdateBiases[i][j] * self.momentum
+                            )
+
+        self.prevUpdateWeights = mean_dCost_dWeights
+        self.prevUpdateBiases = mean_dCost_dBiases
+
+        self.updateWeights(mean_dCost_dWeights)
+        self.updateBiases(mean_dCost_dBiases)
+
+    def decayLearningRate(self, epochs: int):
+        self.learningRate = self.origLearningRate * (
+            1 / (1 + self.learningRateDecay * epochs)
+        )
+
+    def train(
+        self,
+        trainingData: list[tuple[list[float], list[float]]],
+        testingData: list[tuple[list[float], list[float]]] = None,
+    ) -> None:
+
+        from tqdm import tqdm
+
+        errors = []
+        # testingData=  testingData[:100]
+        trainingData = toBatches(trainingData, self.batchSize)
+
+        with tqdm(range(self.epochs)) as loop:
+            for epoch in loop:
+                for batch in trainingData:
+                    self.trainingStep(batch)
+                if testingData is not None:
+                    error = self.getCurrentError(testingData)
+                    errors.append(error)
+                    loop.set_description(f"Error: {error:.2f}")
+                self.decayLearningRate(epoch)
+        return errors
+
+
+# TODO: Backpropagation
 
 if __name__ == "__main__":
-    from random import randrange, shuffle
-    import random
 
-    random.seed(1)
+    with open("src/data/sim_training_data.txt") as f:
+        data = f.read().strip().split("\n")
+    for line in range(len(data)):
+        data[line] = data[line].split(",")
+        data[line] = ([float(data[line][0])], [float(data[line][1])])
 
-    hiddenLayerWeights = [
-        [[randrange(-1, 1) / 10 for _ in range(2)] for _ in range(2)],
-        [[randrange(-1, 1) / 10 for _ in range(3)] for _ in range(3)],
-        [[randrange(-1, 1) / 10 for _ in range(3)] for _ in range(3)],
-    ]
-    hiddenLayerBiases = [
-        [randrange(-1, 1) / 10 for _ in range(2)],
-        [randrange(-1, 1) / 10 for _ in range(3)],
-        [randrange(-1, 1) / 10 for _ in range(3)],
-    ]
+    # split data into training and testing
+    trainingData = data[: int(len(data) * 0.8)]
+    testingData = data[int(len(data) * 0.8) :]
+
+    # split training data into batches
+
     nn = NeuralNetwork(
-        inputSize=2,
-        outputLabels=["a", "b", "c"],
-        hiddenLayerSizes=[2, 3],
-        # hiddenLayerWeights=[
-        # [[1, 1], [1, 1]],
-        # [[0.5, 0.5, 1], [1, 0.5, 1], [1, 0.5, 1]],
-        # ],
-        # hiddenLayerBiases=[[0, 0], [0, 0, 0]],
-        hiddenLayerWeights=hiddenLayerWeights,
-        hiddenLayerBiases=hiddenLayerBiases,
-        activationFunction="Leaky ReLU",
-        activationHyperparameters={"leakiness": 0.01},
-        errorFunction='MSE',
-        trainingHyperparameters={
-            "learningRate": 0.025,
-            "learningRateDecay": 0.5,
-            "epochs": 2000,
-            "momentum": 0.5,
-            "batchSize": 4,
-        },
+        errorFunction="MAE",
+        epochs=500,
+        batchSize=10,
+        learningRate=0.0001,
+        learningRateDecay=0.005,
+        momentum=0.02,
     )
-    print(nn)
-    print("------")
-    # nn.trainingStep([([1, 1], [2, 2, 4]), ([2, 2], [4, 4, 8]), ([3, 3], [6, 6, 12])])
-    nn.loadInput([4, 4])
-    # print(nn.getOutput())
-    nn.loadOutput([16, 8, 8])
+    nn.addLayer(InputLayer(10, inputSize=1))
+    nn.addLayer(Layer(20, activationFunction="Leaky ReLU"))
+    nn.addLayer(Layer(10, activationFunction="Leaky ReLU"))
+    nn.addLayer(Layer(1, activationFunction="Linear"))
 
-    def f(x):
-        return [x * 4, x * 4, x * 4]
+    nn.connectLayers()
 
-    r = 20
-    Data = [([i, i], f(i)) for i in range(1, r)]
-    # normalise Data
-    for i in range(len(Data)):
-        for j in range(len(Data[i][0])):
-            Data[i][0][j] /= r
-        for j in range(len(Data[i][1])):
-            Data[i][1][j] /= r
-    shuffle(Data)
-    # find 0.2, 0.2
-    for i in range(len(Data)):
-        if Data[i][0] == [0.2, 0.2]:
-            print(i, Data[i])
-            print("----")
-            break
-
-    errors = []
-    for run in range(nn.epochs):
-        for i in range(nn.batchSize):
-            data = [Data[i]]
-            nn.trainingStep(data)
-            nn.loadInput([0.2, 0.2])
-            nn.loadOutput([0.8, 0.4, 0.4])
-
-        nn.decayLearningRate(run)
-
-        nn.loadInput([0.4, 0.4])
-        nn.forwardPropagate()
-
-        print(run, nn.getOutput(), nn.getCurrentError(), end=" ")
-        if len(errors) > 10:
-            if errors[-1] > errors[-2] > errors[-3]:
-                print("Increases", end=" ")
-        print()
-
-        errors.append(nn.getCurrentError())
+    errors = nn.train(trainingData, testingData)
+    print("Training complete")
+    print(f"Final error: {errors[-1]}")
+    print("Plotting error graph...")
 
     import matplotlib.pyplot as plt
 
+    plt.plot(errors)
+
     # log scale
-    plt.plot(range(nn.epochs), errors)
-    plt.yscale("log")
-    # show 20 ticks on the x axis
-    plt.locator_params(axis="x", nbins=20)
+    if errors[-1] > 1000:
+        plt.yscale("log")
+
+    # 20 ticks on x axis
+    plt.xticks(range(0, len(errors), len(errors) // 20))
+
     plt.show()
-    print(nn)
 
+    # generate data for graph
+    X = [sample[0] for sample in data]
+    trueY = [sample[1] for sample in data]
+    predictedY = [nn.predict(sample[0]) for sample in data]
 
-# TODO: Rewrite the Neural Network to be more modular.
-# TODO: Store it as a Class, with a NN.addLayer() method so each layer can be customised individually.
+    # plot graph
+    plt.scatter(X, trueY, label="True")
+    plt.scatter(X, predictedY, label="Predicted")
 
-# TODO: Here, training isn't working. The error decreases until about 60 epochs, then increases again.
-# TODO: Changing the learning rate is a temporary fix, but increasing the epochs again causes the error to increase again.
+    plt.legend()
+    plt.show()

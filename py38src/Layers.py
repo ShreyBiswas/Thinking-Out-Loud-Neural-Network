@@ -11,7 +11,7 @@ class Layer:
         self,
         outputSize: int,
         activationFunction=None,
-        activationHyperparameters: dict = None,
+        activationHyperparameters=None,
     ):
 
         if activationFunction is None:
@@ -39,7 +39,7 @@ class Layer:
             string += f"{self.getBias(outputNodeIndex)}, "
         return f"{string[:-2]}]"
 
-    def getArguments(self) -> tuple[int, int, int]:
+    def getArguments(self):
         return (self.nextNodeCount, str(self.activationFunction))
 
     def toOutputLayer(self):
@@ -55,7 +55,7 @@ class Layer:
     def getBias(self, outputNodeIndex: int) -> float:
         return self.biases[outputNodeIndex]
 
-    def setWeights(self, newWeights: list[list[float]] = None):
+    def setWeights(self, newWeights=None):
         if newWeights is None:
             from random import randrange
 
@@ -66,7 +66,7 @@ class Layer:
         else:
             self.weights = newWeights
 
-    def setBiases(self, newBias: list[float] = None):
+    def setBiases(self, newBias=None):
         if newBias is None:
             from random import randrange
 
@@ -100,7 +100,7 @@ class Layer:
             for inputNeuronIndex in range(self.prevNodeCount)
         ) + self.getBias(outputNodeIndex)
 
-    def forwardPropagate(self) -> list[float]:
+    def forwardPropagate(self):
         if self.inputArray is None:
             raise ValueError("Input Array not set.")
         if self.outputArray is None:
@@ -116,11 +116,11 @@ class Layer:
         self.outputArray.load(outputs)
         return outputs
 
-    def updateBiases(self, change: list[int], learningRate: int):
+    def updateBiases(self, change, learningRate: int):
         for outputNodeIndex in range(len(change)):
             self.biases[outputNodeIndex] -= change[outputNodeIndex] * learningRate
 
-    def updateWeights(self, change: list[list[int]], learningRate: int):
+    def updateWeights(self, change, learningRate: int):
         for outputNodeIndex in range(len(change)):
             for inputNeuronIndex in range(len(change[outputNodeIndex])):
                 self.weights[outputNodeIndex][inputNeuronIndex] -= (
@@ -147,9 +147,7 @@ class InputLayer(Layer):
 
 # Output Layer Class
 class OutputLayer(Layer):
-    def __init__(
-        self, outputSize: int, activationFunction=None, labels: list[str] = None
-    ):
+    def __init__(self, outputSize: int, activationFunction=None, labels=None):
         super().__init__(
             outputSize=outputSize,
             activationFunction=activationFunction,
