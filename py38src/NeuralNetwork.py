@@ -354,14 +354,15 @@ class NeuralNetwork:
     ) -> None:
 
         from tqdm import tqdm
+        from tqdm.auto import tqdm
 
         errors = []
         # testingData=  testingData[:100]
         trainingData = toBatches(trainingData, self.batchSize)
 
-        with tqdm(range(self.epochs)) as loop:
+        with tqdm(range(self.epochs), position=0) as loop:
             for epoch in loop:
-                for batch in trainingData:
+                for batch in tqdm(trainingData, leave=False, position=1):
                     self.trainingStep(batch)
                 if testingData is not None:
                     error = self.getCurrentError(testingData)
