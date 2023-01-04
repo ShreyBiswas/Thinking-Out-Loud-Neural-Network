@@ -54,7 +54,10 @@ class Sigmoid:
         self.differential = lambda x: self(x) * (1 - self(x))
 
     def __call__(self, x):
-        return 1 / (1 + self.exp(-x))
+        try:
+            return 1 / (1 + self.exp(-x))
+        except OverflowError:  # x is too large
+            return 1 if x > 0 else 0
 
     def __str__(self):
         return "Sigmoid"

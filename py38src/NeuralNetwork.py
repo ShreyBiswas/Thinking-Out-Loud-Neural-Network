@@ -385,6 +385,9 @@ if __name__ == "__main__":
     trainingData = data[: int(len(data) * 0.8)]
     testingData = data[int(len(data) * 0.8) :]
 
+    # data shape:
+    # [(input, output), (input, output), ...]
+
     # split training data into batches
 
     nn = NeuralNetwork(
