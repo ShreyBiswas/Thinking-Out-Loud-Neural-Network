@@ -133,4 +133,4 @@ tempCodeRunner.py
 
 # VSCode
 .vscode/
-*.workspace
+*.code-workspace
