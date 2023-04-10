@@ -65,6 +65,23 @@ class NeuralNetwork:
         string += f"{self.outputArray}" + "\n"
         return string
 
+    def getCurrentWeights(self):
+        if not self.compiled:
+            raise ValueError("Neural Network is not compiled yet.")
+        return [
+            self.inputLayer.weights,
+            *[layer.weights for layer in self.hiddenLayers],
+            self.outputLayer.weights,
+        ]
+
+    def setCurrentWeights(self, weights: list[list[list[float]]]):
+        if not self.compiled:
+            raise ValueError("Neural Network is not compiled yet.")
+        self.inputLayer.weights = weights[0]
+        for i in range(len(self.hiddenLayers)):
+            self.hiddenLayers[i].weights = weights[i + 1]
+        self.outputLayer.weights = weights[-1]
+
     def addLayer(self, layer: Layer | InputLayer | OutputLayer):
         if self.inputLayer is None:
             if not isinstance(layer, InputLayer):
@@ -122,32 +139,44 @@ class NeuralNetwork:
                 randomiseWeights(
                     self.inputLayer.inputSize,
                     self.inputLayer.nextNodeCount,
-                    between=(-1, 1),
+                    between=self.inputLayer.initialWeightRange,
                 )
             )
             initialWeights.extend(  # add hidden layer weights
                 randomiseWeights(
                     self.hiddenLayers[i].prevNodeCount,
                     self.hiddenLayers[i].nextNodeCount,
+                    between=self.hiddenLayers[i].initialWeightRange,
                 )
                 for i in range(len(self.hiddenLayers))
             )
             initialWeights.append(  # add output layer weights
                 randomiseWeights(
-                    self.outputLayer.prevNodeCount, self.outputLayer.nextNodeCount
+                    self.outputLayer.prevNodeCount,
+                    self.outputLayer.nextNodeCount,
+                    between=self.outputLayer.initialWeightRange,
                 )
             )
         if initialBiases is None:
             initialBiases = []
             initialBiases.append(
-                randomiseBiases(self.inputLayer.nextNodeCount, between=(-1, 1))
+                randomiseBiases(
+                    self.inputLayer.nextNodeCount,
+                    between=self.inputLayer.initialBiasRange,
+                )
             )
             initialBiases.extend(
-                randomiseBiases(self.hiddenLayers[i].nextNodeCount)
+                randomiseBiases(
+                    self.hiddenLayers[i].nextNodeCount,
+                    between=self.hiddenLayers[i].initialBiasRange,
+                )
                 for i in range(len(self.hiddenLayers))
             )
             initialBiases.append(
-                randomiseBiases(self.outputLayer.nextNodeCount, between=(-1, 1))
+                randomiseBiases(
+                    self.outputLayer.nextNodeCount,
+                    between=self.outputLayer.initialBiasRange,
+                )
             )
 
         self.setWeights(initialWeights)
@@ -276,7 +305,7 @@ class NeuralNetwork:
                 dActivation_dWeight = layer.inputArray[inputNode]
                 dActivation_dInput = layer.getWeight(inputNode, outputNode)
 
-                dCost_dWeights[outputNode].append(
+                dCost_dWeights[outputNode].append( # follows mathematical formula from research, dOutput and dActivation cancel
                     dCost_dOutput[outputNode]
                     * dOutput_dActivation
                     * dActivation_dWeight
@@ -359,6 +388,9 @@ class NeuralNetwork:
         # testingData=  testingData[:100]
         trainingData = toBatches(trainingData, self.batchSize)
 
+        globalMin = []
+        globalMinError = float("inf")
+
         with tqdm(range(self.epochs)) as loop:
             for epoch in loop:
                 for batch in trainingData:
@@ -366,12 +398,23 @@ class NeuralNetwork:
                 if testingData is not None:
                     error = self.getCurrentError(testingData)
                     errors.append(error)
-                    loop.set_description(f"Error: {error:.2f}")
+                    loop.set_description(
+                        f"Global Minimum Error: {globalMinError:.2f}, Error: {error:.2f}"
+                    )
                 self.decayLearningRate(epoch)
+                if error < globalMinError:
+                    globalMinError = error
+                    globalMin = self.getCurrentWeights()
+
+        self.setCurrentWeights(globalMin)
+        print(f"Global Minimum Error: {globalMinError:.2f}")
+        print("Using Global Minimum Weights...")
+
         return errors
 
 
-# TODO: Backpropagation
+# TODO: Keep track of the errors and the weights (needed anyways for the display) and select the minimum error weights
+# TODO: Also, try messing around with the learning rate decay algorithm - maybe try a different one? Exponential?
 
 if __name__ == "__main__":
 
@@ -389,18 +432,21 @@ if __name__ == "__main__":
 
     nn = NeuralNetwork(
         errorFunction="MAE",
-        epochs=500,
+        epochs=1000,
         batchSize=10,
-        learningRate=0.0001,
-        learningRateDecay=0.005,
-        momentum=0.02,
+        learningRate=0.000075,
+        learningRateDecay=0.05,
+        momentum=0.05,
     )
+
     nn.addLayer(InputLayer(10, inputSize=1))
     nn.addLayer(Layer(20, activationFunction="Leaky ReLU"))
     nn.addLayer(Layer(10, activationFunction="Leaky ReLU"))
     nn.addLayer(Layer(1, activationFunction="Linear"))
 
     nn.connectLayers()
+
+    startY = [nn.predict(sample[0]) for sample in data]
 
     errors = nn.train(trainingData, testingData)
     print("Training complete")
@@ -426,8 +472,15 @@ if __name__ == "__main__":
     predictedY = [nn.predict(sample[0]) for sample in data]
 
     # plot graph
-    plt.scatter(X, trueY, label="True")
-    plt.scatter(X, predictedY, label="Predicted")
+    figure, axes = plt.subplots(1, 2)
+
+    # pretrained
+    axes[0].scatter(X, predictedY, label="Predicted", s=3)
+    axes[0].scatter(X, startY, label="Start", s=3)
+
+    # after training
+    axes[1].scatter(X, trueY, label="True", s=3)
+    axes[1].scatter(X, predictedY, label="Predicted", s=3)
 
     plt.legend()
     plt.show()

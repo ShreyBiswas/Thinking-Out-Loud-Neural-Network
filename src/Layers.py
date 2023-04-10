@@ -12,6 +12,8 @@ class Layer:
         outputSize: int,
         activationFunction=None,
         activationHyperparameters: dict = None,
+        initialWeightRange: tuple[int, int] = (-5, 5),
+        initialBiasRange: tuple[int, int] = (-5, 5),
     ):
 
         if activationFunction is None:
@@ -26,6 +28,8 @@ class Layer:
             )
 
         self.nextNodeCount = outputSize
+        self.initialWeightRange = initialWeightRange
+        self.initialBiasRange = initialBiasRange
 
     def __str__(self) -> str:
         return f"Layer {self.indexFrom} -> {self.indexTo}: [{self.prevNodeCount}] -> [{self.nextNodeCount}]"
